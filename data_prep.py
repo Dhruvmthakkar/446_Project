@@ -13,7 +13,7 @@ parser.add_argument('--risk_ratio', type=float, default=0.2, help="Target ratio 
 args = parser.parse_args()
 
 RAW_DATA_DIR = Path(args.data_dir)
-OUTPUT_DIR = RAW_DATA_DIR / "sampled_5k_propagated"
+OUTPUT_DIR = RAW_DATA_DIR / "data"
 
 # --- EXHAUSTIVE KEYWORD LIST ---
 RISK_KEYWORDS = [

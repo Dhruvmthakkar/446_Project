@@ -31,7 +31,7 @@ except ImportError:
 
 # ================= ARGS =================
 parser = argparse.ArgumentParser()
-parser.add_argument('--data_dir', type=str, default='./sampled_5k_propagated', help="Path to processed data")
+parser.add_argument('--data_dir', type=str, default='./data', help="Path to processed data")
 parser.add_argument('--epochs', type=int, default=40)
 parser.add_argument('--batch_size', type=int, default=32)
 parser.add_argument('--lr', type=float, default=1e-3)
