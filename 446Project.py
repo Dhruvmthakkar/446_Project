@@ -118,7 +118,7 @@ class BertEmbedder:
         
         batch_ids, batch_txts = [], []
         for u in tqdm(range(num_users), desc="Encoding"):
-            texts = user_texts.get(u, [])[:5]
+            texts = user_texts.get(u, [])
             if not texts: continue
             for t in texts:
                 batch_ids.append(u); batch_txts.append(t)

@@ -1,10 +1,10 @@
 {
   "n_splits": 10,
-  "mean_macro_f1": 0.7475288170415171,
-  "mean_recall": 0.7861790698237392,
-  "mean_precision": 0.672797133204238,
-  "mean_roc_auc": 0.8017431003044788,
-  "mean_avg_precision": 0.7546758715415499,
-  "mean_pr_auc": 0.7546521338123996,
+  "mean_macro_f1": 0.7475284099050092,
+  "mean_recall": 0.786168684529316,
+  "mean_precision": 0.6728002088850651,
+  "mean_roc_auc": 0.8017430773470755,
+  "mean_avg_precision": 0.7546758499061139,
+  "mean_pr_auc": 0.7546521422463837,
   "n_nodes": 392740
 }
