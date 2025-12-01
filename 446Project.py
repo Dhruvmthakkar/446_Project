@@ -18,7 +18,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from sklearn.model_selection import StratifiedKFold
-from sklearn.metrics import f1_score, average_precision_score, precision_recall_curve, auc, roc_auc_score, recall_score
+from sklearn.metrics import f1_score, average_precision_score, precision_recall_curve, auc, roc_auc_score, recall_score, precision_score
 from sklearn.preprocessing import StandardScaler
 from transformers import AutoTokenizer, AutoModel
 
@@ -35,7 +35,7 @@ parser.add_argument('--data_dir', type=str, default='./sampled_5k_propagated', h
 parser.add_argument('--epochs', type=int, default=40)
 parser.add_argument('--batch_size', type=int, default=32)
 parser.add_argument('--lr', type=float, default=1e-3)
-parser.add_argument('--n_splits', type=int, default=10, help="Number of K-Fold splits (e.g. 5 or 10)")
+parser.add_argument('--n_splits', type=int, default=10, help="Number of K-Fold splits")
 args = parser.parse_args()
 
 # Config
@@ -81,11 +81,11 @@ def load_data():
     
     edge_index = torch.tensor([src_clean, dst_clean], dtype=torch.long)
     
-    # Calculate Degree BEFORE adding self-loops (for filtering isolated nodes later)
+    # Degree Calculation (for filtering isolated nodes in eval)
     row, col = edge_index
     node_degrees = degree(col, len(nodes), dtype=torch.long)
     
-    # Now add self-loops for the model
+    # Add Self Loops
     edge_index, _ = add_self_loops(edge_index, num_nodes=len(nodes))
     
     return nodes, edges, uid2idx, torch.tensor(node_feats, dtype=torch.float), torch.tensor(nodes['label'].values, dtype=torch.long), edge_index, node_degrees
@@ -96,10 +96,9 @@ class BertEmbedder:
         self.model = AutoModel.from_pretrained(BERT_MODEL).to(DEVICE)
         
     def get_embeddings(self, edges_df, uid2idx, num_users):
-        # 1. Check Cache
+        # Cache Check with Size Validation
         if EMBED_CACHE.exists():
             loaded_embs = np.load(EMBED_CACHE)
-            # SAFETY CHECK: Ensure cache matches current node count
             if loaded_embs.shape[0] == num_users:
                 print(" > Loading cached BERT embeddings...")
                 return torch.tensor(loaded_embs, dtype=torch.float)
@@ -158,14 +157,14 @@ def main():
     node_degrees = node_degrees.to(DEVICE)
 
     skf = StratifiedKFold(n_splits=args.n_splits, shuffle=True, random_state=SEED)
-    metrics = {"macro_f1": [], "roc_auc": [], "ap": [], "pr_auc": [], "recall": []}
+    metrics = {"macro_f1": [], "roc_auc": [], "ap": [], "pr_auc": [], "recall": [], "precision": []}
     
     print(f"\nTraining on {DEVICE} ({args.n_splits}-Fold CV)...")
     
     for fold, (train_idx, val_idx) in enumerate(skf.split(np.zeros(len(labels)), labels.numpy())):
         print(f"\n--- Fold {fold+1} ---")
         
-        # --- Exclude isolated nodes from EVALUATION ---
+        # --- Connected Component Filter ---
         val_bool_mask = torch.zeros(len(nodes), dtype=torch.bool).to(DEVICE)
         val_bool_mask[val_idx] = True
         connected_nodes_mask = (node_degrees > 0)
@@ -181,7 +180,7 @@ def main():
         opt = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=1e-4)
         crit = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([pos_weight]).to(DEVICE))
         
-        best_stats = {"macro_f1": 0, "roc_auc": 0, "ap": 0, "pr_auc": 0, "recall": 0}
+        best_stats = {"macro_f1": 0, "roc_auc": 0, "ap": 0, "pr_auc": 0, "recall": 0, "precision": 0}
         
         for epoch in range(args.epochs):
             model.train()
@@ -190,7 +189,7 @@ def main():
             loss = crit(logits[train_idx], labels_t[train_idx].float())
             loss.backward(); opt.step()
             
-            # Validation on FILTERED set
+            # Validation
             model.eval()
             with torch.no_grad():
                 val_logits = logits[final_eval_mask]
@@ -214,8 +213,8 @@ def main():
                 preds = (probs >= best_thresh).astype(int)
                 current_macro_f1 = f1_score(y_true, preds, average='macro')
                 
-                # --- CALCULATE RECALL (Sensitivity) ---
                 current_recall = recall_score(y_true, preds, zero_division=0)
+                current_precision = precision_score(y_true, preds, zero_division=0)
 
                 if current_macro_f1 > best_stats["macro_f1"]:
                     best_stats["macro_f1"] = float(current_macro_f1)
@@ -223,19 +222,22 @@ def main():
                     best_stats["ap"] = float(current_ap)
                     best_stats["pr_auc"] = float(pr_auc)
                     best_stats["recall"] = float(current_recall)
+                    best_stats["precision"] = float(current_precision)
 
-        print(f" > Best Macro F1: {best_stats['macro_f1']:.4f} | Recall: {best_stats['recall']:.4f}")
+        print(f" > Best F1: {best_stats['macro_f1']:.4f} | Recall: {best_stats['recall']:.4f} | Prec: {best_stats['precision']:.4f}")
         
         metrics["macro_f1"].append(best_stats["macro_f1"])
         metrics["roc_auc"].append(best_stats["roc_auc"])
         metrics["ap"].append(best_stats["ap"])
         metrics["pr_auc"].append(best_stats["pr_auc"])
         metrics["recall"].append(best_stats["recall"])
+        metrics["precision"].append(best_stats["precision"])
 
     summary = {
         "n_splits": int(skf.get_n_splits()),
         "mean_macro_f1": float(np.mean(metrics["macro_f1"])),
         "mean_recall": float(np.mean(metrics["recall"])),
+        "mean_precision": float(np.mean(metrics["precision"])),
         "mean_roc_auc": float(np.mean(metrics["roc_auc"])),
         "mean_avg_precision": float(np.mean(metrics["ap"])),
         "mean_pr_auc": float(np.mean(metrics["pr_auc"])),
