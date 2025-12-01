@@ -195,6 +195,10 @@ def train_and_evaluate(mode, nodes, text_embs, node_feats, labels, edge_index, n
     skf = StratifiedKFold(n_splits=args.n_splits, shuffle=True, random_state=SEED)
     metrics = {"macro_f1": [], "roc_auc": [], "ap": [], "pr_auc": [], "recall": [], "precision": []}
     
+    # Container for Raw Predictions (y_true, y_probs)
+    all_y_true = []
+    all_y_probs = []
+    
     # Pre-move static tensors to device to save overhead
     labels_t = labels.to(DEVICE)
     node_feats_t = node_feats.to(DEVICE)
@@ -225,6 +229,8 @@ def train_and_evaluate(mode, nodes, text_embs, node_feats, labels, edge_index, n
         crit = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([pos_weight]).to(DEVICE))
         
         best_stats = {k: 0.0 for k in metrics}
+        best_fold_y_true = None
+        best_fold_y_probs = None
         
         for epoch in range(args.epochs):
             model.train()
@@ -266,9 +272,22 @@ def train_and_evaluate(mode, nodes, text_embs, node_feats, labels, edge_index, n
                     best_stats["pr_auc"] = float(pr_auc)
                     best_stats["recall"] = float(current_recall)
                     best_stats["precision"] = float(current_precision)
+                    
+                    # Store raw preds for this fold
+                    best_fold_y_true = y_true
+                    best_fold_y_probs = probs
 
         print(f"   Fold {fold+1} Best F1: {best_stats['macro_f1']:.4f}")
         for k in metrics: metrics[k].append(best_stats[k])
+        
+        if best_fold_y_true is not None:
+            all_y_true.extend(best_fold_y_true)
+            all_y_probs.extend(best_fold_y_probs)
+
+    # --- SAVE RAW OUTPUTS PER MODE ---
+    output_file = DATA_DIR / f"{mode}_raw_outputs.npz"
+    print(f"Saving raw predictions for {mode} to {output_file}...")
+    np.savez(output_file, y_true=np.array(all_y_true), y_probs=np.array(all_y_probs))
 
     return {
         "mean_macro_f1": float(np.mean(metrics["macro_f1"])),

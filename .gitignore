@@ -1,4 +1,2 @@
 venv/
-data/*
-!data/metrics_summary.json
-!data/ablation_metrics_summary.json
+data/*.csv

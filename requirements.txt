@@ -6,3 +6,5 @@ torch_geometric
 transformers
 tqdm
 openpyxl
+matplotlib
+seaborn
