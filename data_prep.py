@@ -8,7 +8,7 @@ from pathlib import Path
 # ================= ARGS =================
 parser = argparse.ArgumentParser(description="Step 1: Data Prep & Snowball Sampling")
 parser.add_argument('--data_dir', type=str, default='.', help="Path to folder containing raw .xlsx files")
-parser.add_argument('--target_nodes', type=int, default=5000, help="Total number of nodes to sample")
+parser.add_argument('--target_nodes', type=int, default=50000, help="Total number of nodes to sample")
 parser.add_argument('--risk_ratio', type=float, default=0.2, help="Target ratio of High Risk users (e.g. 0.2 = 20%)")
 args = parser.parse_args()
 
