@@ -18,7 +18,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from sklearn.model_selection import StratifiedKFold
-from sklearn.metrics import f1_score, average_precision_score, precision_recall_curve, auc, roc_auc_score
+from sklearn.metrics import f1_score, average_precision_score, precision_recall_curve, auc, roc_auc_score, recall_score
 from sklearn.preprocessing import StandardScaler
 from transformers import AutoTokenizer, AutoModel
 
@@ -35,6 +35,7 @@ parser.add_argument('--data_dir', type=str, default='./sampled_5k_propagated', h
 parser.add_argument('--epochs', type=int, default=40)
 parser.add_argument('--batch_size', type=int, default=32)
 parser.add_argument('--lr', type=float, default=1e-3)
+parser.add_argument('--n_splits', type=int, default=10, help="Number of K-Fold splits (e.g. 5 or 10)")
 args = parser.parse_args()
 
 # Config
@@ -80,10 +81,8 @@ def load_data():
     
     edge_index = torch.tensor([src_clean, dst_clean], dtype=torch.long)
     
-    # Calculate Degree BEFORE adding self-loops (to find true isolated nodes)
-    # We use this later to filter the test set
+    # Calculate Degree BEFORE adding self-loops (for filtering isolated nodes later)
     row, col = edge_index
-    # Number of edges per node
     node_degrees = degree(col, len(nodes), dtype=torch.long)
     
     # Now add self-loops for the model
@@ -97,9 +96,18 @@ class BertEmbedder:
         self.model = AutoModel.from_pretrained(BERT_MODEL).to(DEVICE)
         
     def get_embeddings(self, edges_df, uid2idx, num_users):
+        # 1. Check Cache
         if EMBED_CACHE.exists():
-            return torch.tensor(np.load(EMBED_CACHE), dtype=torch.float)
+            loaded_embs = np.load(EMBED_CACHE)
+            # SAFETY CHECK: Ensure cache matches current node count
+            if loaded_embs.shape[0] == num_users:
+                print(" > Loading cached BERT embeddings...")
+                return torch.tensor(loaded_embs, dtype=torch.float)
+            else:
+                print(f" > Cache mismatch (Cache: {loaded_embs.shape[0]}, Current: {num_users}). Regenerating...")
         
+        print(" > Computing BERT embeddings from Edge Texts...")
+
         user_texts = defaultdict(list)
         for row in edges_df.itertuples():
             uid = str(getattr(row, 'source_user_id', row[1])) 
@@ -149,32 +157,20 @@ def main():
     text_embs = text_embs.to(DEVICE); labels_t = labels.to(DEVICE)
     node_degrees = node_degrees.to(DEVICE)
 
-    skf = StratifiedKFold(n_splits=10, shuffle=True, random_state=SEED)
-    metrics = {"macro_f1": [], "roc_auc": [], "ap": [], "pr_auc": []}
+    skf = StratifiedKFold(n_splits=args.n_splits, shuffle=True, random_state=SEED)
+    metrics = {"macro_f1": [], "roc_auc": [], "ap": [], "pr_auc": [], "recall": []}
     
-    print(f"\nTraining on {DEVICE}...")
+    print(f"\nTraining on {DEVICE} ({args.n_splits}-Fold CV)...")
     
     for fold, (train_idx, val_idx) in enumerate(skf.split(np.zeros(len(labels)), labels.numpy())):
         print(f"\n--- Fold {fold+1} ---")
         
-        # --- Exclude isolated nodes from VALIDATION ---
-        # We only care about validating nodes that actually have connections (Degree > 0)
-        # because GATs are useless on isolated nodes.
-        # This keeps the training set intact (Transductive), but filters the metric calculation.
-        val_mask_indices = torch.tensor(val_idx).to(DEVICE)
-        connected_nodes_mask = (node_degrees > 0)
-        
-        # Intersection: Node is in Validation Set AND Node has Neighbors
-        # Note: We must convert val_idx (numpy) to boolean mask first
+        # --- Exclude isolated nodes from EVALUATION ---
         val_bool_mask = torch.zeros(len(nodes), dtype=torch.bool).to(DEVICE)
         val_bool_mask[val_idx] = True
-        
+        connected_nodes_mask = (node_degrees > 0)
         final_eval_mask = val_bool_mask & connected_nodes_mask
-        
-        # If we filtered everyone out (rare), fallback to standard val
-        if final_eval_mask.sum() < 10:
-            final_eval_mask = val_bool_mask
-        
+        if final_eval_mask.sum() < 10: final_eval_mask = val_bool_mask
         # -----------------------------------------------------------
         
         n_pos = (labels[train_idx] == 1).sum().item()
@@ -185,7 +181,7 @@ def main():
         opt = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=1e-4)
         crit = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([pos_weight]).to(DEVICE))
         
-        best_stats = {"macro_f1": 0, "roc_auc": 0, "ap": 0, "pr_auc": 0}
+        best_stats = {"macro_f1": 0, "roc_auc": 0, "ap": 0, "pr_auc": 0, "recall": 0}
         
         for epoch in range(args.epochs):
             model.train()
@@ -197,47 +193,49 @@ def main():
             # Validation on FILTERED set
             model.eval()
             with torch.no_grad():
-                # Use the Final Eval Mask instead of raw val_idx
                 val_logits = logits[final_eval_mask]
                 y_true = labels_t[final_eval_mask].cpu().numpy()
                 probs = torch.sigmoid(val_logits).cpu().numpy()
                 
                 # Metrics
-                if len(np.unique(y_true)) > 1:
-                    roc_auc = roc_auc_score(y_true, probs)
-                else:
-                    roc_auc = 0.5 # Handle edge case
-                    
+                roc_auc = roc_auc_score(y_true, probs) if len(np.unique(y_true)) > 1 else 0.5
                 precision, recall, thresholds = precision_recall_curve(y_true, probs)
                 pr_auc = auc(recall, precision)
                 current_ap = average_precision_score(y_true, probs)
                 
-                # Optimize F1 Threshold
+                # Optimize Threshold using Risk Class F1
                 numer = 2 * precision * recall
                 denom = precision + recall
                 f1_scores = np.divide(numer, denom, out=np.zeros_like(numer), where=denom!=0)
                 best_idx = np.argmax(f1_scores)
                 best_thresh = thresholds[best_idx] if best_idx < len(thresholds) else 0.5
                 
+                # Calculate metrics at this Optimal Threshold
                 preds = (probs >= best_thresh).astype(int)
                 current_macro_f1 = f1_score(y_true, preds, average='macro')
+                
+                # --- CALCULATE RECALL (Sensitivity) ---
+                current_recall = recall_score(y_true, preds, zero_division=0)
 
                 if current_macro_f1 > best_stats["macro_f1"]:
                     best_stats["macro_f1"] = float(current_macro_f1)
                     best_stats["roc_auc"] = float(roc_auc)
                     best_stats["ap"] = float(current_ap)
                     best_stats["pr_auc"] = float(pr_auc)
+                    best_stats["recall"] = float(current_recall)
 
-        print(f" > Best Macro F1: {best_stats['macro_f1']:.4f} | ROC-AUC: {best_stats['roc_auc']:.4f}")
+        print(f" > Best Macro F1: {best_stats['macro_f1']:.4f} | Recall: {best_stats['recall']:.4f}")
         
         metrics["macro_f1"].append(best_stats["macro_f1"])
         metrics["roc_auc"].append(best_stats["roc_auc"])
         metrics["ap"].append(best_stats["ap"])
         metrics["pr_auc"].append(best_stats["pr_auc"])
+        metrics["recall"].append(best_stats["recall"])
 
     summary = {
         "n_splits": int(skf.get_n_splits()),
         "mean_macro_f1": float(np.mean(metrics["macro_f1"])),
+        "mean_recall": float(np.mean(metrics["recall"])),
         "mean_roc_auc": float(np.mean(metrics["roc_auc"])),
         "mean_avg_precision": float(np.mean(metrics["ap"])),
         "mean_pr_auc": float(np.mean(metrics["pr_auc"])),
@@ -248,7 +246,7 @@ def main():
         json.dump(summary, f, indent=2)
         
     print("\n" + "="*40)
-    print("SAVING METRICS SUMMARY (FILTERED EVAL)")
+    print("SAVING METRICS SUMMARY")
     print(json.dumps(summary, indent=2))
     print(f"Saved to {RESULTS_FILE}")
     print("="*40)

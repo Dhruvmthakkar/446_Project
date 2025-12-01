@@ -1,8 +1,9 @@
 {
   "n_splits": 10,
-  "mean_macro_f1": 0.7442298484658905,
-  "mean_roc_auc": 0.7391010626940707,
-  "mean_avg_precision": 0.6190647702156498,
-  "mean_pr_auc": 0.6127456207661632,
-  "n_nodes": 4739
+  "mean_macro_f1": 0.7295724622337298,
+  "mean_recall": 0.729212935130256,
+  "mean_roc_auc": 0.7277613530893233,
+  "mean_avg_precision": 0.5872048408487915,
+  "mean_pr_auc": 0.5796306623569488,
+  "n_nodes": 4680
 }
