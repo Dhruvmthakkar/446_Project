@@ -1,0 +1,31 @@
+{
+  "bert": {
+    "mean_macro_f1": 0.7440708398135392,
+    "mean_recall": 0.8261157469237516,
+    "mean_precision": 0.6623740036487953,
+    "mean_roc_auc": 0.8073574584443568,
+    "mean_avg_precision": 0.7535336337082394,
+    "mean_pr_auc": 0.7535188361268303
+  },
+  "gat": {
+    "mean_macro_f1": 0.29933721022932636,
+    "mean_recall": 0.9982467728349119,
+    "mean_precision": 0.42027397323596877,
+    "mean_roc_auc": 0.5207144290508736,
+    "mean_avg_precision": 0.43744024703022777,
+    "mean_pr_auc": 0.4373118800719481
+  },
+  "fusion": {
+    "mean_macro_f1": 0.7448757567117605,
+    "mean_recall": 0.792637700832468,
+    "mean_precision": 0.6668174476562021,
+    "mean_roc_auc": 0.8019293086740881,
+    "mean_avg_precision": 0.7541933159801315,
+    "mean_pr_auc": 0.7541706520128283
+  },
+  "meta": {
+    "n_splits": 10,
+    "n_nodes": 392740,
+    "epochs": 40
+  }
+}
