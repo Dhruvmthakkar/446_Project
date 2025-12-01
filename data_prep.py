@@ -1,37 +1,31 @@
-# data_prep.py
 import pandas as pd
 import numpy as np
 import argparse
 import sys
 from pathlib import Path
+from tqdm import tqdm
 
 # ================= ARGS =================
-parser = argparse.ArgumentParser(description="Step 1: Data Prep & Snowball Sampling")
+parser = argparse.ArgumentParser(description="Step 1: Full Data Prep (No Sampling)")
 parser.add_argument('--data_dir', type=str, default='.', help="Path to folder containing raw .xlsx files")
-parser.add_argument('--target_nodes', type=int, default=5000, help="Total number of nodes to sample")
-parser.add_argument('--risk_ratio', type=float, default=0.2, help="Target ratio of High Risk users (e.g. 0.2 = 20%)")
 args = parser.parse_args()
 
 RAW_DATA_DIR = Path(args.data_dir)
 OUTPUT_DIR = RAW_DATA_DIR / "data"
 
-# --- EXHAUSTIVE KEYWORD LIST ---
 RISK_KEYWORDS = [
-    # SUICIDAL IDEATION
     "suicide", "suicidal", "kill myself", "killing myself", "kms", "end my life",
     "end it all", "want to die", "wanna die", "wish i was dead", "better off dead",
     "no reason to live", "tired of living", "pointless existence", "goodbye forever",
     "suicide note", "planning my death", "taking my own life", "ready to go",
     "sleep forever", "never wake up", "my last day", "final goodbye", "unalive",
     "sewer slide", "commit suicide", "catch the bus", "jump off", "hang myself",
-    # SELF HARM
     "self harm", "self-harm", "sh", "cutting myself", "cut myself", "cutter",
     "razor blade", "wrists", "bleeding out", "burn myself", "burning skin",
     "hitting myself", "punish myself", "overdose", "oding", "pills", "swallow pills",
     "starving myself", "not eating", "skinny enough", "anorexia", "bulimia",
     "purging", "binge eating", "body dysmorphia", "hate my body", "ugly",
     "fat", "disgusting", "scars", "fresh cuts", "styro", "beans", 
-    # DESPAIR
     "hopeless", "hopelessness", "despair", "empty", "hollow", "numb",
     "worthless", "useless", "failure", "fail", "loser", "burden",
     "waste of space", "waste of air", "nobody cares", "no one cares",
@@ -42,7 +36,6 @@ RISK_KEYWORDS = [
     "damaged", "shattered", "falling apart", "falling down", "drowning",
     "suffocating", "can't breathe", "trapped", "stuck", "no way out",
     "darkness", "black hole", "void", "abyss", "misery", "miserable",
-    # ANXIETY
     "anxiety", "anxious", "panic attack", "panicking", "freaking out",
     "scared", "terrified", "fear", "dread", "doom", "overwhelmed",
     "stressed", "stress", "pressure", "can't cope", "can't handle it",
@@ -51,7 +44,6 @@ RISK_KEYWORDS = [
     "spiraling", "out of control", "losing my mind", "going crazy",
     "going mad", "insane", "manic", "mania", "paranoid", "paranoia",
     "intrusive thoughts", "voices in my head", "demons", "haunted",
-    # DEPRESSION
     "depressed", "depression", "sad", "sadness", "crying", "tears",
     "sobbing", "cry myself to sleep", "can't stop crying", "exhausted",
     "tired", "fatigue", "lethargic", "no energy", "can't get out of bed",
@@ -59,7 +51,6 @@ RISK_KEYWORDS = [
     "don't want to wake up", "nightmare", "emotional pain", "hurts so much",
     "pain inside", "aching", "agony", "torture", "suffering", "suffer",
     "why me", "what's the point", "nothing matters", "apathy", "don't care",
-    # HELP / CONTEXT
     "help me", "need help", "please help", "save me", "someone talk to me",
     "anyone there", "listening", "vent", "venting", "rant", "ranting",
     "advice", "support", "therapy", "therapist", "psychiatrist", "meds",
@@ -75,7 +66,7 @@ def clean_id(col):
     return pd.to_numeric(col, errors='coerce').fillna(0).astype(int).astype(str)
 
 def run_pipeline():
-    print(f"Reading raw Excel data from: {RAW_DATA_DIR.resolve()}")
+    print(f"Reading FULL RAW DATA from: {RAW_DATA_DIR.resolve()}")
     try:
         print(" > Loading Nodes_Data.xlsx...")
         nodes = pd.read_excel(RAW_DATA_DIR / "Nodes_Data.xlsx", engine='openpyxl')
@@ -83,20 +74,19 @@ def run_pipeline():
         tweets = pd.read_excel(RAW_DATA_DIR / "Tweet_Contents.xlsx", engine='openpyxl')
         print(" > Loading Edges_Data.xlsx...")
         edges = pd.read_excel(RAW_DATA_DIR / "Edges_Data.xlsx", engine='openpyxl')
-    except FileNotFoundError:
-        print(f"Error: Could not find .xlsx files in '{RAW_DATA_DIR.resolve()}'.")
+    except Exception as e:
+        print(f"Error loading files: {e}")
         sys.exit(1)
 
     # --- 0. JOIN EDGES AND TWEETS ---
     print("Step 0: Joining Edges and Tweets...")
     if len(edges) != len(tweets):
-        print(f"Warning: Edges count ({len(edges)}) != Tweets count ({len(tweets)}). Joining by index.")
+        print(f"Warning: Counts differ. Edges: {len(edges)}, Tweets: {len(tweets)}. Joining by index.")
     
     edges = edges.reset_index(drop=True)
     tweets = tweets.reset_index(drop=True)
     interactions = pd.concat([edges, tweets], axis=1)
     
-    # --- CLEANING ---
     print(" > Cleaning IDs...")
     nodes['User ID'] = clean_id(nodes['User ID'])
     interactions['User ID (Source)'] = clean_id(interactions['User ID (Source)'])
@@ -104,100 +94,81 @@ def run_pipeline():
     
     text_col = 'Tweet' if 'Tweet' in interactions.columns else 'Text'
     if text_col not in interactions.columns: text_col = tweets.columns[0]
-    print(f" > Using '{text_col}' as text source.")
 
-    # --- 1. WEAK SUPERVISION (WITH CAP) ---
-    print("Step 1: Identifying Seed Nodes...")
-    risk_interactions = interactions[interactions[text_col].astype(str).str.contains('|'.join(RISK_KEYWORDS), case=False, na=False)]
-    seed_ids = risk_interactions['User ID (Source)'].unique().tolist()
-    print(f" > Found {len(seed_ids)} potential high-risk seeds.")
+    # --- 1. WEAK SUPERVISION (ALL NODES) ---
+    print("Step 1: Identifying Seeds (Full Dataset)...")
+    # Vectorized string search on the full column
+    risk_mask = interactions[text_col].astype(str).str.contains('|'.join(RISK_KEYWORDS), case=False, na=False)
+    risk_interactions = interactions[risk_mask]
+    seed_ids = set(risk_interactions['User ID (Source)'].unique())
     
-    # --- SEED CAPPING ---
-    target_seeds = int(args.target_nodes * args.risk_ratio)
-    
-    if len(seed_ids) > target_seeds:
-        # print(f" > Capping seeds to {target_seeds} to maintain target ratio ({args.risk_ratio*100}%).")
-        seed_ids = list(np.random.choice(seed_ids, target_seeds, replace=False))
-    elif len(seed_ids) < 10:
-        print(" > Warning: Very few seeds found. Adding random seeds.")
-        seed_ids.extend(nodes['User ID'].sample(50).tolist())
+    print(f" > Found {len(seed_ids)} initial risk seeds out of {len(nodes)} total users.")
 
     node_labels = {uid: 0 for uid in nodes['User ID']}
-    for uid in seed_ids: node_labels[uid] = 1
+    for uid in seed_ids: 
+        if uid in node_labels:
+            node_labels[uid] = 1
 
-    # --- 2. SNOWBALL SAMPLING ---
-    print(f"Step 2: Snowball Sampling (Target: {args.target_nodes})...")
+    # --- 2. BUILD GRAPH (NO SNOWBALL - JUST BUILD IT) ---
+    print("Step 2: Building Full Adjacency Map...")
     adj = {}
-    for row in interactions.itertuples():
+    
+    # Pre-filter: We only care about edges where Source AND Dest exist in our Nodes file
+    # This prevents "Ghost Users" from 500k dataset crashing the logic
+    valid_users = set(nodes['User ID'])
+    
+    # We use a loop with tqdm for visibility on large data
+    for row in tqdm(interactions.itertuples(), total=len(interactions), desc="Mapping Edges"):
         try:
             src = str(getattr(row, "User ID (Source)"))
             dst = str(getattr(row, "User ID (Destination)"))
         except AttributeError:
             src = str(getattr(row, "_1"))
             dst = str(getattr(row, "_2"))
-            
-        if src not in adj: adj[src] = []
-        if dst not in adj: adj[dst] = []
-        adj[src].append(dst)
-        adj[dst].append(src)
-
-    selected_users = set(seed_ids)
-    queue = list(seed_ids)
-    
-    # Standard Snowball
-    while len(selected_users) < args.target_nodes and len(queue) > 0:
-        curr = queue.pop(0)
-        neighbors = adj.get(curr, [])
-        for n in neighbors:
-            if n not in selected_users:
-                selected_users.add(n)
-                queue.append(n)
-                if len(selected_users) >= args.target_nodes: break
-    
-    print(f" > Snowball reached {len(selected_users)} nodes.")
-
-    # --- 3. RANDOM BACKFILL ---
-    # If we haven't hit the target size, fill with random Safe users from the Metadata file
-    if len(selected_users) < args.target_nodes:
-        remaining_needed = args.target_nodes - len(selected_users)
-        print(f" > Backfilling with {remaining_needed} random safe users to hit target size...")
         
-        all_users = set(nodes['User ID'])
-        available = list(all_users - selected_users)
-        
-        if len(available) >= remaining_needed:
-            fill = np.random.choice(available, remaining_needed, replace=False)
-            selected_users.update(fill)
-        else:
-            print(" > Warning: Not enough users in metadata to fill target. Using all available.")
-            selected_users.update(available)
+        # Only map valid users to keep graph clean
+        if src in valid_users and dst in valid_users:
+            if src not in adj: adj[src] = []
+            if dst not in adj: adj[dst] = []
+            adj[src].append(dst)
+            adj[dst].append(src)
 
-    # --- 4. LABEL PROPAGATION ---
-    print("Step 4: Label Propagation...")
+    # --- 3. LABEL PROPAGATION ---
+    print("Step 3: Label Propagation on Full Graph...")
     final_labels = {}
-    for uid in selected_users:
+    
+    # Process all valid users
+    for uid in tqdm(valid_users, desc="Propagating Labels"):
+        # Keep original labels
         if node_labels.get(uid, 0) == 1:
             final_labels[uid] = 1
             continue
+        
+        # Check neighbors
         neighbors = adj.get(uid, [])
-        risk_neighbors = sum(1 for n in neighbors if n in selected_users and node_labels.get(n, 0) == 1)
+        risk_neighbors = 0
+        for n in neighbors:
+            if node_labels.get(n, 0) == 1:
+                risk_neighbors += 1
+        
+        # Threshold rule
         final_labels[uid] = 1 if risk_neighbors >= 2 else 0
 
-    # --- 5. STANDARDIZED SAVING ---
+    # --- 4. SAVING ---
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    print("Step 5: Saving standardized CSVs...")
+    print("Step 4: Saving Full Dataset...")
 
-    # SAVE NODES (Filter Ghosts: only keep selected users that actually exist in Nodes Data)
-    final_nodes = nodes[nodes['User ID'].isin(selected_users)].copy()
+    # Nodes
+    final_nodes = nodes.copy()
     final_nodes['label'] = final_nodes['User ID'].map(final_labels)
     final_nodes = final_nodes.rename(columns={'User ID':'user_id', 'Followers':'followers', 'Followed':'followed', 'Verified':'verified'})
     cols_to_keep = [c for c in ['user_id', 'label', 'followers', 'followed', 'verified'] if c in final_nodes.columns]
     final_nodes[cols_to_keep].to_csv(OUTPUT_DIR / "nodes.csv", index=False)
 
-    # SAVE EDGES
+    # Edges (Filtered to valid users only)
     final_interactions = interactions[
-        (interactions['User ID (Source)'].isin(selected_users)) & 
-        (interactions['User ID (Destination)'].isin(selected_users))
+        (interactions['User ID (Source)'].isin(valid_users)) & 
+        (interactions['User ID (Destination)'].isin(valid_users))
     ].copy()
     
     final_edges = final_interactions[['User ID (Source)', 'User ID (Destination)', text_col]].copy()
@@ -208,18 +179,16 @@ def run_pipeline():
     })
     final_edges.to_csv(OUTPUT_DIR / "edges.csv", index=False)
     
-    # --- FINAL SUMMARY STATS ---
-    print("\n" + "="*40)
-    print("DATA PREPARATION COMPLETE")
-    
+    # Stats
     n_high_risk = final_nodes['label'].sum()
     n_total = len(final_nodes)
     ratio = (n_high_risk / n_total) * 100 if n_total > 0 else 0
     
+    print("\n" + "="*40)
+    print("FULL DATA PREPARATION COMPLETE")
     print(f"Total Nodes:      {n_total}")
-    print(f"Total Interactions: {len(final_edges)}")
+    print(f"Total Edges:      {len(final_edges)}")
     print(f"High Risk Users:  {n_high_risk} ({ratio:.1f}%)")
-    print(f"Safe Users:       {n_total - n_high_risk}")
     print(f"Saved to:         {OUTPUT_DIR.resolve()}")
     print("="*40 + "\n")
 
