@@ -67,9 +67,9 @@ def plot_scalability():
 
 def plot_comparative_roc():
     """Plots ROC curves for BERT, GAT, and Fusion on the same chart."""
-    modes = ['bert', 'gat', 'fusion']
+    modes = ['fusion']
     colors = {'bert': 'blue', 'gat': 'red', 'fusion': 'green'}
-    labels = {'bert': 'BERT (Text)', 'gat': 'GAT (Graph)', 'fusion': 'Fusion (Ours)'}
+    labels = {'bert': 'BERT (Text)', 'gat': 'GAT (Graph)', 'fusion': 'Fusion'}
     
     plt.figure(figsize=(7, 7))
     found_any = False

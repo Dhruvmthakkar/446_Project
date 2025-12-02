@@ -11,17 +11,17 @@
     "mean_macro_f1": 0.29933721022932636,
     "mean_recall": 0.9982467728349119,
     "mean_precision": 0.42027397323596877,
-    "mean_roc_auc": 0.5207148757409268,
-    "mean_avg_precision": 0.43744088928629254,
-    "mean_pr_auc": 0.43731255342056735
+    "mean_roc_auc": 0.5207131528486119,
+    "mean_avg_precision": 0.43743814736195336,
+    "mean_pr_auc": 0.437309752276369
   },
   "fusion": {
     "mean_macro_f1": 0.7444435614679012,
     "mean_recall": 0.7936986673539151,
     "mean_precision": 0.6657862926082323,
-    "mean_roc_auc": 0.8021029605497549,
-    "mean_avg_precision": 0.7572390167934849,
-    "mean_pr_auc": 0.757218974466954
+    "mean_roc_auc": 0.8021029708859423,
+    "mean_avg_precision": 0.757238968629938,
+    "mean_pr_auc": 0.7572189548338557
   },
   "meta": {
     "n_splits": 10,
